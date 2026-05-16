@@ -1,0 +1,42 @@
+{
+  "name": "agentic-commerce-for-commercetools",
+  "version": "0.1.0",
+  "description": "Agentic commerce for commercetools Composable Commerce. Multi-protocol (ACP, UCP, AP2) discovery layer + cart-handoff Connect Service. Ships /llms.txt, /.well-known/ucp, robots.txt allowlist for real AI crawlers, schema.org JSON-LD on PDPs (via API), and cart-deeplink redemption. Implements @xpaysh/adapter-contract against commercetools' Project API. Rail-agnostic: merchant's existing payment integration handles money.",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "xpay✦ <hello@xpay.sh>",
+  "homepage": "https://github.com/xpaysh/agentic-commerce-for-commercetools#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xpaysh/agentic-commerce-for-commercetools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xpaysh/agentic-commerce-for-commercetools/issues"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agentic-commerce-for-commercetools": "./dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "node --watch --import tsx/esm src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@xpaysh/adapter-contract": "^0.1.0",
+    "@xpaysh/cart-deeplinks": "^0.1.0",
+    "@xpaysh/discovery": "^0.1.0",
+    "@xpaysh/ucp-schemas": "^0.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
