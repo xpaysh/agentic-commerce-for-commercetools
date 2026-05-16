@@ -1,6 +1,6 @@
 {
   "name": "agentic-commerce-for-commercetools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agentic commerce for commercetools Composable Commerce. Multi-protocol (ACP, UCP, AP2) discovery layer + cart-handoff Connect Service. Ships /llms.txt, /.well-known/ucp, robots.txt allowlist for real AI crawlers, schema.org JSON-LD on PDPs (via API), and cart-deeplink redemption. Implements @xpaysh/adapter-contract against commercetools' Project API. Rail-agnostic: merchant's existing payment integration handles money.",
   "private": true,
   "license": "Apache-2.0",

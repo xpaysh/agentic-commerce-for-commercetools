@@ -26,42 +26,67 @@ import { buildDiscoveryRoutes } from "./routes/discovery";
 import { buildJsonLdRoute } from "./routes/jsonld";
 import { buildCartDeeplinkRoute } from "./routes/cart-deeplink";
 import { buildHealthRoute } from "./routes/health";
+import { buildUcpRouteTable } from "./routes/ucp";
+import { buildAcpRouteTable } from "./routes/acp";
+import { buildAp2RouteTable } from "./routes/ap2";
 import type { RouteHandler, RouteRequest, RouteResponse } from "./routes/types";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 function buildHandler() {
   const config = loadConfig();
   const ct = new CommercetoolsClient(config.ct);
   const adapter = new CommercetoolsAdapter({ ct, siteUrl: config.siteUrl });
 
+  // Discovery + cart-deeplink + health + jsonld are exact-match (GET-only paths).
   const exactRoutes: Record<string, RouteHandler> = {
     ...buildDiscoveryRoutes(config),
     "/healthz": buildHealthRoute(ct, VERSION),
     "/cart/deeplink": buildCartDeeplinkRoute(config, adapter),
   };
-
   const jsonLdRoute = buildJsonLdRoute(config, adapter);
 
+  // Protocol routes — one sub-table per protocol; iterate at dispatch time.
+  // The route matcher (./routes/match.ts) supports path params + methods.
+  const subTables = [
+    buildUcpRouteTable(adapter),
+    buildAcpRouteTable(adapter),
+    buildAp2RouteTable(adapter, config.merchantSlug),
+  ];
+
   async function dispatch(req: RouteRequest): Promise<RouteResponse> {
-    if (req.method !== "GET" && req.method !== "HEAD") {
+    // 1. Exact-match GET routes (discovery + health + cart-deeplink)
+    if (req.method === "GET" || req.method === "HEAD") {
+      const handler = exactRoutes[req.path];
+      if (handler) return handler(req);
+
+      if (req.path.startsWith("/api/v1/jsonld/product/")) {
+        return jsonLdRoute(req);
+      }
+    }
+
+    // 2. Protocol routes (UCP / ACP / AP2 — including POST / PATCH / GET with path params)
+    for (const tbl of subTables) {
+      const m = tbl.match(req.method, req.path);
+      if (m) {
+        req.params = m.params;
+        return m.handler(req);
+      }
+    }
+
+    // 3. 405 vs 404
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "POST" && req.method !== "PATCH" && req.method !== "OPTIONS") {
       return {
         status: 405,
-        headers: { "content-type": "application/json", "allow": "GET, HEAD" },
+        headers: { "content-type": "application/json; charset=utf-8", "allow": "GET, HEAD, POST, PATCH" },
         body: JSON.stringify({ error: "method_not_allowed" }),
       };
-    }
-    const handler = exactRoutes[req.path];
-    if (handler) return handler(req);
-
-    if (req.path.startsWith("/api/v1/jsonld/product/")) {
-      return jsonLdRoute(req);
     }
 
     return {
       status: 404,
       headers: { "content-type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ error: "not_found", path: req.path }),
+      body: JSON.stringify({ error: "not_found", path: req.path, method: req.method }),
     };
   }
 
@@ -85,15 +110,15 @@ async function main() {
       for (const [k, v] of Object.entries(req.headers)) {
         if (typeof v === "string") headers[k.toLowerCase()] = v;
       }
-      const out = await dispatch({
-        method: req.method || "GET",
-        path: u.pathname,
-        query,
-        headers,
-      });
+      const method = (req.method || "GET").toUpperCase();
+      let body: string | undefined;
+      if (method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE") {
+        body = await readBody(req);
+      }
+      const out = await dispatch({ method, path: u.pathname, query, headers, body });
       res.writeHead(out.status, out.headers);
       res.end(out.body);
-      logRequest(req.method, u.pathname, out.status, Date.now() - started);
+      logRequest(method, u.pathname, out.status, Date.now() - started);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.writeHead(500, { "content-type": "application/json" });
@@ -111,6 +136,25 @@ async function main() {
     console.log(`  commercetools project: ${config.ct.projectKey}`);
     // eslint-disable-next-line no-console
     console.log(`  site url: ${config.siteUrl}`);
+  });
+}
+
+/** Buffer the entire request body up to a sensible cap. POST endpoints in v0.2 receive JSON cart/checkout payloads; ~512 KB is more than enough headroom. */
+function readBody(req: http.IncomingMessage, maxBytes = 512 * 1024): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        reject(new Error(`request body exceeds ${maxBytes} bytes`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
   });
 }
 

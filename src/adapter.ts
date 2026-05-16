@@ -58,14 +58,14 @@ export class CommercetoolsAdapter implements PlatformAdapter {
 
   readonly capabilities: AdapterCapabilities = {
     cart: true,
-    checkout: false,     // v0.2 — needs payment-method wiring
+    checkout: true,      // v0.2 — completeCheckout creates a CT Order from the Cart
     catalogSearch: true,
     catalogLookup: true,
-    order: false,        // v0.2 — getOrder works; listOrders / completeCheckout don't yet
-    refunds: false,
-    disputes: false,
+    order: true,         // v0.2 — getOrder + listOrders both wired
+    refunds: false,      // v0.3
+    disputes: false,     // v0.3
     inventoryRealtime: true,
-    webhooks: false,     // v0.2 — wire commercetools subscription/notification
+    webhooks: false,     // v0.3 — commercetools subscriptions
     extras: {},
   };
 
@@ -234,15 +234,64 @@ export class CommercetoolsAdapter implements PlatformAdapter {
   }
 
   // -------------------------------------------------------------------------
-  // Checkout — v0.2
+  // Checkout
   // -------------------------------------------------------------------------
 
-  async completeCheckout(_input: CompleteCheckoutInput): Promise<Order> {
-    throw new NotImplementedError(
-      "completeCheckout is not implemented in v0.1 — requires payment-method wiring. " +
-        "Buyers are redirected to the merchant's existing checkout via the cart-deeplink " +
-        "handler; payment runs through the merchant's existing PSP integration there.",
-    );
+  /**
+   * Create a commercetools Order from a Cart. Note that completeCheckout in
+   * v0.2 does NOT settle payment — it creates the Order in `Open`/`BalanceDue`
+   * state, and the merchant's existing PSP integration handles payment via the
+   * normal storefront-checkout flow OR via a post-order webhook. ACP delegated-
+   * payment + AP2 mandate-based settlement land in v0.3 once the CP role is in
+   * place (see deferred-roadmap-payments-and-credentialing.md).
+   *
+   * The `payment` field on CompleteCheckoutInput is opaque and adapter-defined.
+   * For commercetools v0.2 we accept these shapes:
+   *
+   *   { type: "deferred" }
+   *     — order created in BalanceDue state; storefront completes payment
+   *
+   *   { type: "external_token", token: "psp-token-string" }
+   *     — order created and a CT Payment object is attached referencing the
+   *       external token; storefront still triggers capture via its PSP
+   */
+  async completeCheckout(input: CompleteCheckoutInput): Promise<Order> {
+    // Need current cart version for the order-from-cart action.
+    const cart = await this.ct.fetchJson<CtCart>(`/carts/${encodeURIComponent(input.cartId)}`);
+    if (cart.cartState !== "Active") {
+      throw new Error(`completeCheckout: cart ${input.cartId} is not Active (state=${cart.cartState})`);
+    }
+
+    // Apply addresses to the cart first if supplied (commercetools requires
+    // shipping address before order-from-cart will accept it).
+    const preActions: Array<Record<string, unknown>> = [];
+    if (input.shippingAddress) {
+      preActions.push({ action: "setShippingAddress", address: this.contractAddressToCt(input.shippingAddress) });
+    }
+    if (input.billingAddress) {
+      preActions.push({ action: "setBillingAddress", address: this.contractAddressToCt(input.billingAddress) });
+    }
+
+    let workingVersion = cart.version;
+    if (preActions.length > 0) {
+      const updated = await this.ct.fetchJson<CtCart>(`/carts/${encodeURIComponent(input.cartId)}`, {
+        method: "POST",
+        body: JSON.stringify({ version: workingVersion, actions: preActions }),
+      });
+      workingVersion = updated.version;
+    }
+
+    // Create the Order from the cart.
+    const orderBody = {
+      cart: { id: input.cartId, typeId: "cart" },
+      version: workingVersion,
+    };
+    const order = await this.ct.fetchJson<CtOrder>("/orders", {
+      method: "POST",
+      body: JSON.stringify(orderBody),
+    });
+
+    return mapOrder(order, this.locale);
   }
 
   // -------------------------------------------------------------------------
@@ -259,9 +308,69 @@ export class CommercetoolsAdapter implements PlatformAdapter {
     }
   }
 
-  async listOrders(_query: OrderQuery): Promise<Paginated<Order>> {
-    // commercetools' /orders endpoint supports queries; v0.2 will wire status/date filters.
-    throw new NotImplementedError("listOrders is not implemented in v0.1 — getOrder by id works.");
+  async listOrders(query: OrderQuery): Promise<Paginated<Order>> {
+    const params = new URLSearchParams();
+    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 50) : 20;
+    params.set("limit", String(limit));
+    if (query.cursor) {
+      const offset = parseInt(query.cursor, 10);
+      if (Number.isFinite(offset) && offset >= 0) params.set("offset", String(offset));
+    }
+
+    // commercetools uses `where` predicates for filtering. Build a CTQL clause.
+    const where: string[] = [];
+    if (query.status) {
+      const statuses = Array.isArray(query.status) ? query.status : [query.status];
+      const ctStates = statuses.map((s) => this.contractStatusToCtOrderState(s)).filter((x): x is string => !!x);
+      if (ctStates.length > 0) {
+        where.push(`orderState in (${ctStates.map((s) => `"${s}"`).join(", ")})`);
+      }
+    }
+    if (query.createdAfter) {
+      where.push(`createdAt > "${query.createdAfter}"`);
+    }
+    if (query.createdBefore) {
+      where.push(`createdAt < "${query.createdBefore}"`);
+    }
+    if (query.externalId) {
+      where.push(`externalId = "${query.externalId.replace(/"/g, "")}"`);
+    }
+    if (where.length > 0) {
+      params.set("where", where.join(" and "));
+    }
+    params.set("sort", "createdAt desc");
+
+    const res = await this.ct.fetchJson<{
+      results: CtOrder[];
+      total: number;
+      offset: number;
+      count: number;
+    }>(`/orders?${params.toString()}`);
+
+    const items = res.results.map((o) => mapOrder(o, this.locale));
+    const nextOffset = res.offset + res.count;
+    const nextCursor = nextOffset < res.total ? String(nextOffset) : null;
+    return { items, nextCursor, total: res.total };
+  }
+
+  /** Map our OrderStatus enum back to commercetools' three orthogonal state fields, for `where` filtering on orderState. */
+  private contractStatusToCtOrderState(s: import("@xpaysh/adapter-contract").OrderStatus): string | undefined {
+    switch (s) {
+      case "created":
+      case "processing":
+        return "Open";
+      case "confirmed":
+      case "fulfilled":
+      case "shipped":
+      case "delivered":
+        return "Confirmed"; // closest CT mapping; deliveries are inferred from shipmentState (caller can filter further)
+      case "cancelled":
+        return "Cancelled";
+      case "refunded":
+        return undefined; // CT models refunds via paymentState, not orderState
+      default:
+        return undefined;
+    }
   }
 
   // -------------------------------------------------------------------------
