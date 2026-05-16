@@ -2,7 +2,7 @@
 
 Multi-protocol agentic-commerce layer for [commercetools](https://commercetools.com) Composable Commerce. Speaks **[ACP](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol)**, **[UCP](https://github.com/Universal-Commerce-Protocol/ucp)**, and **[AP2](https://github.com/google-agentic-commerce/AP2)** out of the box, emits real-standard discovery files (`/llms.txt`, schema.org JSON-LD, real-AI-crawler `robots.txt`), and settles through your existing commercetools payment integrations — cards, [Stripe MPP](https://mpp.dev), [x402](https://x402.org), stablecoins.
 
-> Phase B-1 of the [`agentic-commerce-for-*`](https://github.com/xpaysh?q=agentic-commerce-for-) family. Scaffold; full implementation lands in coming weeks alongside the [plugin template](https://github.com/xpaysh/agentic-commerce-plugin-template).
+> Scaffold for the [`agentic-commerce-for-*`](https://github.com/xpaysh?q=agentic-commerce-for-) family. Full implementation lands in coming weeks alongside the [plugin template](https://github.com/xpaysh/agentic-commerce-plugin-template).
 
 ## What this gives a commercetools merchant
 
@@ -12,9 +12,9 @@ Multi-protocol agentic-commerce layer for [commercetools](https://commercetools.
 - **Cart deeplinks** — JWT-signed (commercial mode) or query-string (standalone) — pre-fill a commercetools Cart and redirect the buyer to your existing checkout.
 - **Two-mode operation** — *standalone* (no xpay backend, discovery + protocol endpoints only) or *commercial* (xpay backend adds catalog hosting, attribution, multi-region analytics).
 
-## Why commercetools first in Phase B
+## Why commercetools first
 
-The autocomplete probe (2026-05-16) showed `commercetools agentic …` has the densest cluster of search demand among the Phase-B candidates — 7+ distinct agentic stems vs 4–5 for BigCommerce / Magento. Combined with commercetools' headless / JS-native shape, it lets the shared TypeScript template establish a clean foundation that BigCommerce (B-2) and the others can inherit.
+The autocomplete probe (2026-05-16) showed `commercetools agentic …` has the densest cluster of search demand among the platforms surveyed — 7+ distinct agentic stems vs 4–5 for BigCommerce / Magento. Combined with commercetools' headless / JS-native shape, it lets the shared TypeScript template establish a clean foundation that the next platforms can inherit.
 
 ## Architecture (planned)
 
@@ -33,7 +33,7 @@ Real discovery files (`/llms.txt`, schema.org JSON-LD) are emitted by your store
 ## Status
 
 - 🚧 **Scaffold** — README + LICENSE only. Implementation pending the [plugin template](https://github.com/xpaysh/agentic-commerce-plugin-template) extraction from [`agentic-commerce-for-woocommerce`](https://github.com/xpaysh/agentic-commerce-for-woocommerce).
-- Target first usable release: alongside the template repo's first content drop (Phase B-1, weeks 5–8).
+- Target first usable release: alongside the template repo's first content drop.
 - Track progress and adjacent platforms in the [awesome-agentic-commerce](https://github.com/xpaysh/awesome-agentic-commerce) registry.
 
 ## See also
