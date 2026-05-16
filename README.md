@@ -2,7 +2,7 @@
 
 Connect Service that exposes a [commercetools](https://commercetools.com) Composable Commerce store to AI shopping agents — `/llms.txt`, `/.well-known/ucp` (UCP business profile), schema.org JSON-LD on PDPs (via API), and signed-JWT cart deeplinks that pre-fill a commercetools cart and redirect into the merchant's existing checkout.
 
-**Status**: v0.1.0 — discovery surface + cart-handoff fully working. ACP/UCP REST protocol endpoints land in v0.2. Apache-2.0.
+**Status**: v0.2.0 — discovery surface, cart handoff, **full ACP/UCP/AP2 endpoint stack** on top of the `@xpaysh/adapter-contract` interface. Apache-2.0.
 
 ## Architecture
 
@@ -42,29 +42,71 @@ The service is a **standalone Node app** running alongside the merchant's storef
 
 ## What you get out of the box
 
-| Surface | Path | Default |
+### Discovery layer (v0.1+)
+
+| Method | Path | Notes |
 |---|---|---|
-| Discovery — Markdown menu | `GET /llms.txt` | on |
-| Discovery — UCP business profile (Google + Shopify + Etsy + Wayfair + Target + Walmart fetch this) | `GET /.well-known/ucp` | on |
-| Discovery — AI-crawler allow blocks | `GET /robots.txt` | on |
-| Discovery — A2A 1.0 agent card (watchlist) | `GET /.well-known/agent-card.json` | off (`EMIT_AGENT_CARD=1` to enable) |
-| Discovery — RFC 9728 OAuth resource metadata | `GET /.well-known/oauth-protected-resource` | off (`EMIT_OAUTH_PROTECTED_RESOURCE=1` to enable) |
-| JSON-LD per product (storefront embeds in PDP HTML) | `GET /api/v1/jsonld/product/:id[?slim=1]` | on |
-| Cart-deeplink redemption | `GET /cart/deeplink?token=<jwt>` | on |
-| Liveness + commercetools reachability | `GET /healthz` | on |
+| GET | `/llms.txt` | llmstxt.org Markdown menu |
+| GET | `/.well-known/ucp` | UCP business profile (Google + Shopify + Etsy + Wayfair + Target + Walmart fetch this) |
+| GET | `/robots.txt` | AI-crawler allow blocks (template — storefront merges) |
+| GET | `/.well-known/agent-card.json` | A2A 1.0; opt-in via `EMIT_AGENT_CARD=1` |
+| GET | `/.well-known/oauth-protected-resource` | RFC 9728; opt-in via `EMIT_OAUTH_PROTECTED_RESOURCE=1` |
+| GET | `/api/v1/jsonld/product/:id[?slim=1]` | schema.org Product JSON-LD; storefront embeds in PDP HTML |
+| GET | `/cart/deeplink?token=<jwt>` | redeem cart-deeplink → CT cart → 302 to checkout |
+| GET | `/healthz` | liveness + commercetools reachability |
+
+### UCP — Universal Commerce Protocol (v0.2)
+
+REST surface advertised in `/.well-known/ucp` under `services.dev.ucp.shopping[0].endpoint`. Snake-case JSON; minor-units money; ISO currency codes.
+
+| Method | Path | Body / params |
+|---|---|---|
+| GET | `/api/ucp/v1/catalog/search?q=&sku=&limit=&cursor=&sort=` | search params |
+| GET | `/api/ucp/v1/catalog/products/:id` | path |
+| POST | `/api/ucp/v1/carts` | `{items[{sku,quantity,variant_id?}], currency?, external_id?}` |
+| GET | `/api/ucp/v1/carts/:id` | — |
+| PATCH | `/api/ucp/v1/carts/:id` | `{set_items[], remove_skus[], shipping_address, billing_address, discount_code}` |
+| POST | `/api/ucp/v1/checkout` | `{cart_id, shipping_address?, billing_address?, payment?}` |
+| GET | `/api/ucp/v1/orders/:id` | — |
+
+**Request integrity**: UCP requires RFC 9421 HTTP Message Signatures. v0.2 ships the endpoint behavior; full signature verification middleware is configurable (off by default; enable via `VERIFY_UCP_SIGNATURES=1` once signing keys are populated in the profile — completes in v0.3).
+
+### ACP — Agentic Commerce Protocol (v0.2)
+
+Per-session surface — agent opens a `checkout_session`, mutates it, completes it.
+
+| Method | Path | Body |
+|---|---|---|
+| POST | `/api/acp/v1/checkout_sessions` | `{items[{sku,qty,variation_id?}], currency?, capabilities_requested[], agent?, surface?, buyer_id?, external_id?}` |
+| GET | `/api/acp/v1/checkout_sessions/:id` | — |
+| POST | `/api/acp/v1/checkout_sessions/:id` | `{items[]?, remove_skus[]?, shipping_address?, billing_address?, discount_code?}` |
+| POST | `/api/acp/v1/checkout_sessions/:id/complete` | `{shipping_address?, billing_address?, payment?, note?}` → `Order` |
+| GET | `/api/acp/v1/orders/:id` | — |
+
+Session storage is in-memory in v0.2 — cold-start loses the session→cart mapping. (CT cart IS the source of truth; agents just need to re-open a session.) v0.3 moves session metadata to DynamoDB.
+
+`POST /api/acp/v1/delegate_payment` — deferred to v0.3 (CP role).
+
+### AP2 — Agent Payments Protocol (v0.2)
+
+| Method | Path | Body |
+|---|---|---|
+| POST | `/api/ap2/v1/mandates/verify` | `{mandate: "<jwt-vc>", require_audience?: boolean}` |
+| POST | `/api/ap2/v1/checkout` | `{cart_id, mandate, shipping_address?, billing_address?}` |
+
+**Mandate signature verification** is structural-only in v0.2 — the response includes `signature_verified: false` and `signature_verification_status: "deferred_to_v0.3"`. Audience + expiry checks DO run. Full issuer-key fetching + VC signature verification lands in v0.3 alongside the CP role.
 
 `/llms.txt` and `/.well-known/ucp` advertise xpay's hosted protocol endpoints (`agent-commerce.xpay.sh/acp/v1/<slug>`, `…/ucp/v1/<slug>`, `…/ap2/v1/<slug>`). Standalone-mode merchants can override to point at their own endpoints; xpay-commercial-tier merchants leave the defaults.
 
-## What's intentionally **not** here in v0.1
+## What's intentionally **not** here in v0.2
 
-- ACP `POST /checkout_sessions` + `/delegate_payment` endpoints — v0.2
-- UCP REST surface (cart / checkout / order endpoints with RFC 9421 signed requests) — v0.2
-- AP2 mandate acceptance — v0.2
-- `completeCheckout` adapter method — v0.2 (needs payment-method wiring; for v0.1, buyers land on the merchant's existing CT checkout via the cart-deeplink handler)
-- `listOrders` adapter method — v0.2 (`getOrder` by id works today)
-- Refunds + disputes — v0.3
+- **ACP `POST /delegate_payment`** — agent supplies a delegated-payment credential; merchant captures via PSP. Requires the Credential Provider role. v0.3.
+- **AP2 mandate signature verification** — structural + audience + expiry checks pass; the actual issuer signature verification needs a trusted-issuer JWK fetcher. v0.3.
+- **UCP request-signature verification (RFC 9421)** — middleware skeleton in place; defaults to off. Wire on once signing_keys are populated in the merchant's profile + agent platforms are signing. v0.3.
+- **Refunds + disputes** — `adapter.refundOrder` / `adapter.openDispute`. `capabilities.{refunds, disputes} = false`. v0.3.
+- **Webhooks for order state changes** — commercetools subscriptions. `capabilities.webhooks = false`. v0.3.
 
-The `CommercetoolsAdapter` implements [`PlatformAdapter`](https://www.npmjs.com/package/@xpaysh/adapter-contract) with the v0.1 methods marked `capabilities.{checkout,order,refunds,disputes,webhooks} = false`. v0.2 flips them on as each is implemented.
+The `CommercetoolsAdapter` v0.2 capabilities: `{cart: true, checkout: true, catalogSearch: true, catalogLookup: true, order: true, refunds: false, disputes: false, inventoryRealtime: true, webhooks: false}`.
 
 ## Quickstart
 
