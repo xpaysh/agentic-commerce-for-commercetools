@@ -1,6 +1,6 @@
 {
   "name": "agentic-commerce-for-commercetools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agentic commerce for commercetools Composable Commerce. Multi-protocol (ACP, UCP, AP2) discovery layer + cart-handoff Connect Service. Ships /llms.txt, /.well-known/ucp, robots.txt allowlist for real AI crawlers, schema.org JSON-LD on PDPs (via API), and cart-deeplink redemption. Implements @xpaysh/adapter-contract against commercetools' Project API. Rail-agnostic: merchant's existing payment integration handles money.",
   "private": true,
   "license": "Apache-2.0",
@@ -23,18 +23,23 @@
     "start": "node dist/server.js",
     "dev": "node --watch --import tsx/esm src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "tsx tests/conformance.test.ts"
   },
   "dependencies": {
     "@xpaysh/adapter-contract": "^0.1.0",
     "@xpaysh/cart-deeplinks": "^0.1.0",
     "@xpaysh/discovery": "^0.1.0",
-    "@xpaysh/ucp-schemas": "^0.1.1"
+    "@xpaysh/ucp-schemas": "^0.2.0",
+    "@xpaysh/acp-schemas": "^0.1.0",
+    "@xpaysh/http-message-signatures": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@xpaysh/conformance-fixtures": "^0.2.0",
+    "ajv": "^8.20.0"
   },
   "engines": {
     "node": ">=18"

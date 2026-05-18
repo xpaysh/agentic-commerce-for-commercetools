@@ -29,9 +29,10 @@ import { buildHealthRoute } from "./routes/health";
 import { buildUcpRouteTable } from "./routes/ucp";
 import { buildAcpRouteTable } from "./routes/acp";
 import { buildAp2RouteTable } from "./routes/ap2";
+import { withSigVerify } from "./middleware/sig-verify";
 import type { RouteHandler, RouteRequest, RouteResponse } from "./routes/types";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 function buildHandler() {
   const config = loadConfig();
@@ -90,7 +91,10 @@ function buildHandler() {
     };
   }
 
-  return { dispatch, config };
+  // Wrap dispatch with RFC 9421 signature verification on /ucp/* + /acp/* paths.
+  // Off by default; flip VERIFY_UCP_SIGNATURES / VERIFY_ACP_SIGNATURES once signing
+  // agents are registered. See src/middleware/sig-verify.ts.
+  return { dispatch: withSigVerify(dispatch), config };
 }
 
 // ---------------------------------------------------------------------------
