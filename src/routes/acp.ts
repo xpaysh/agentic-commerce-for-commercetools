@@ -18,23 +18,25 @@
  *   POST   /api/acp/v1/delegate_payment                   agent supplies delegated payment
  *                                                         credential; merchant captures
  *
- * Session storage: v0.2 uses an in-memory Map keyed by checkout_session_id.
- * Sessions are bound to a commercetools cart_id, and the CT cart IS the
- * source of truth (we re-fetch it on each call). Cold-start loses the
- * mapping, which means agents need to re-open a session if the Lambda /
- * service restarts; v0.3 moves session metadata to DynamoDB.
+ * Session storage: pluggable via `@xpaysh/acp-session-store`. Default driver is
+ * `InMemorySessionStore` (single-instance dev); production sets
+ * `ACP_SESSION_STORE=dynamodb` + `XPAY_ACP_SESSIONS_TABLE` + `ACP_SESSION_PLUGIN_ID`
+ * so the shared `xpay-acp-sessions` DynamoDB table absorbs cold-starts and
+ * fan-out across Lambda containers. Sessions are bound to a commercetools
+ * cart_id; the CT cart remains the source of truth (re-fetched on each call).
  */
 
+import { createSessionStore, type ACPSession } from "@xpaysh/acp-session-store";
 import { RouteTable } from "./match";
 import type { RouteHandler, RouteRequest, RouteResponse } from "./types";
 import type { CommercetoolsAdapter } from "../adapter";
 import type { Cart, Order, Address } from "@xpaysh/adapter-contract";
 
 // ---------------------------------------------------------------------------
-// Session store (in-memory; v0.3 will move to DDB)
+// Session store — env-driven (memory | dynamodb)
 // ---------------------------------------------------------------------------
 
-interface AcpSession {
+interface AcpSession extends ACPSession {
   id: string;
   cartId: string;
   buyerId?: string;
@@ -42,9 +44,20 @@ interface AcpSession {
   surface?: string;
   capabilitiesRequested: string[];
   createdAt: string;
+  expiresAt?: string;
 }
 
-const sessions = new Map<string, AcpSession>();
+// 24h default TTL. DDB driver writes expiresAtEpoch; the InMemory driver
+// expires sessions at access time. Override via ACP_SESSION_TTL_HOURS.
+const SESSION_TTL_HOURS = Number(process.env.ACP_SESSION_TTL_HOURS || 24);
+
+const sessions = createSessionStore({
+  pluginId: process.env.ACP_SESSION_PLUGIN_ID || "agentic-commerce-for-commercetools",
+});
+
+function newExpiresAt(): string {
+  return new Date(Date.now() + SESSION_TTL_HOURS * 3600 * 1000).toISOString();
+}
 
 function newSessionId(): string {
   return "acpsess_" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
@@ -261,8 +274,9 @@ function createSession(adapter: CommercetoolsAdapter): RouteHandler {
       surface: body.surface,
       capabilitiesRequested: body.capabilities_requested || [],
       createdAt: new Date().toISOString(),
+      expiresAt: newExpiresAt(),
     };
-    sessions.set(session.id, session);
+    await sessions.put(session);
 
     return jsonResponse(201, sessionView(session, cart));
   };
@@ -272,8 +286,8 @@ function updateSession(adapter: CommercetoolsAdapter): RouteHandler {
   return async (req): Promise<RouteResponse> => {
     const id = req.params?.id;
     if (!id) return acpError(400, "invalid_request", "checkout_session_id required");
-    const s = sessions.get(id);
-    if (!s) return acpError(404, "session_not_found", `checkout session ${id} not found (cold start? sessions are in-memory in v0.2)`);
+    const s = await sessions.get(id) as AcpSession | null;
+    if (!s) return acpError(404, "session_not_found", `checkout session ${id} not found or expired`);
 
     const body = (parseBody(req) || {}) as AcpUpdateSessionBody;
 
@@ -302,7 +316,7 @@ function getSession(adapter: CommercetoolsAdapter): RouteHandler {
   return async (req): Promise<RouteResponse> => {
     const id = req.params?.id;
     if (!id) return acpError(400, "invalid_request", "checkout_session_id required");
-    const s = sessions.get(id);
+    const s = await sessions.get(id) as AcpSession | null;
     if (!s) return acpError(404, "session_not_found", `checkout session ${id} not found`);
     const cart = await adapter.getCart(s.cartId);
     if (!cart) return acpError(404, "cart_not_found", "underlying cart not found");
@@ -314,7 +328,7 @@ function completeSession(adapter: CommercetoolsAdapter): RouteHandler {
   return async (req): Promise<RouteResponse> => {
     const id = req.params?.id;
     if (!id) return acpError(400, "invalid_request", "checkout_session_id required");
-    const s = sessions.get(id);
+    const s = await sessions.get(id) as AcpSession | null;
     if (!s) return acpError(404, "session_not_found", `checkout session ${id} not found`);
 
     const body = (parseBody(req) || {}) as AcpCompleteSessionBody;
@@ -337,8 +351,8 @@ function completeSession(adapter: CommercetoolsAdapter): RouteHandler {
       return acpError(500, "checkout_failed", msg);
     }
 
-    // Sessions are single-use after complete; remove from the map
-    sessions.delete(id);
+    // Sessions are single-use after complete; remove from the store
+    await sessions.delete(id);
 
     return jsonResponse(201, {
       checkout_session_id: id,
