@@ -29,10 +29,11 @@ import { buildHealthRoute } from "./routes/health";
 import { buildUcpRouteTable } from "./routes/ucp";
 import { buildAcpRouteTable } from "./routes/acp";
 import { buildAp2RouteTable } from "./routes/ap2";
+import { buildWebhookRouteTable } from "./routes/webhooks";
 import { withSigVerify } from "./middleware/sig-verify";
 import type { RouteHandler, RouteRequest, RouteResponse } from "./routes/types";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 
 function buildHandler() {
   const config = loadConfig();
@@ -53,6 +54,7 @@ function buildHandler() {
     buildUcpRouteTable(adapter),
     buildAcpRouteTable(adapter),
     buildAp2RouteTable(adapter, config.merchantSlug),
+    buildWebhookRouteTable(),
   ];
 
   async function dispatch(req: RouteRequest): Promise<RouteResponse> {
